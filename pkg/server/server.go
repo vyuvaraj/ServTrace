@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"servtrace/pkg/store"
+
+	"github.com/vyuvaraj/ServShared"
 )
 
 type Server struct {
@@ -19,10 +21,7 @@ func NewServer(ts *store.Store) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, req *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
+	mux.HandleFunc("/healthz", ServShared.HealthzHandler)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -49,7 +48,7 @@ func (s *Server) Handler() http.Handler {
 		s.handleGetTraceTree(w, req, traceID)
 	})
 
-	return mux
+	return ServShared.AuthMiddleware(mux)
 }
 
 type OtlpPayload struct {
