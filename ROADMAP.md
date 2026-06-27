@@ -25,3 +25,14 @@ This roadmap outlines the planned development phases for the ServTrace distribut
 - [ ] **ServStore Cold Tier**: Export cold trace files to S3-compatible ServStore storage.
 - [ ] **Sampling Policies**: Head-based and tail-based sampling rules to filter noise.
 - [ ] **Span metrics generation**: Auto-calculate throughput and latency percentiles (p50/p90/p99) on ingest.
+
+
+## Phase 3: Production Observability (Next Level)
+- [ ] **Trace Sampling Strategies**: Head-based and tail-based sampling with configurable rates per service.
+- [ ] **Span Anomaly Detection**: Detect latency spikes and error bursts automatically. Alert via ServConsole.
+- [ ] **Trace Comparison**: Compare two traces side-by-side to identify regression causes.
+- [ ] **Service Map Generation**: Auto-build dependency graph from trace parent-child relationships.
+- [ ] **Retention Policies**: Configurable TTL per service. Auto-archive old traces to ServStore.
+- [ ] **Metrics Derivation**: Extract RED metrics (Rate, Error, Duration) from traces. No separate metrics pipeline needed.
+- [ ] **Trace-to-Log Correlation**: Link trace spans to structured log entries via shared trace_id.
+- [ ] **Distributed Context Baggage**: Propagate custom key-value pairs across service boundaries via trace context.
