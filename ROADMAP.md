@@ -23,7 +23,7 @@ This roadmap outlines the planned development phases for the ServTrace distribut
 
 ## Phase 3: High Scale & Retention (Planned)
 - [x] **ServStore Cold Tier**: Export cold trace files to S3-compatible ServStore storage. [June 29, 2026]
-- [ ] **Sampling Policies**: Head-based and tail-based sampling rules to filter noise.
+- [x] **Sampling Policies**: Head-based and tail-based sampling rules to filter noise. [June 29, 2026]
 - [ ] **Span metrics generation**: Auto-calculate throughput and latency percentiles (p50/p90/p99) on ingest.
 
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"strconv"
 	"sync"
 )
@@ -36,17 +37,27 @@ type TraceSummary struct {
 }
 
 type Store struct {
-	mu      sync.RWMutex
-	spans   map[string][]Span // key: traceId
-	limit   int
-	order   []string // FIFO queue of traceIds for eviction
-	OnEvict func(traceID string, spans []Span)
+	mu           sync.RWMutex
+	spans        map[string][]Span // key: traceId
+	limit        int
+	order        []string // FIFO queue of traceIds for eviction
+	OnEvict      func(traceID string, spans []Span)
+	samplingRate int
+	sampled      map[string]bool // key: traceId
 }
 
 func NewStore(limit int) *Store {
+	samplingRate := 50
+	if env := os.Getenv("SERV_TRACE_SAMPLING_RATE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			samplingRate = val
+		}
+	}
 	return &Store{
-		spans: make(map[string][]Span),
-		limit: limit,
+		spans:        make(map[string][]Span),
+		limit:        limit,
+		samplingRate: samplingRate,
+		sampled:      make(map[string]bool),
 	}
 }
 
@@ -67,12 +78,24 @@ func (s *Store) AddSpans(newSpans []Span) {
 				s.order = s.order[1:]
 				evicted := s.spans[oldest]
 				delete(s.spans, oldest)
-				if s.OnEvict != nil && len(evicted) > 0 {
+				
+				// Tail-based sampling evaluation during eviction!
+				isSampled := s.sampled[oldest]
+				delete(s.sampled, oldest)
+				
+				if isSampled && s.OnEvict != nil && len(evicted) > 0 {
 					go s.OnEvict(oldest, evicted)
 				}
 			}
 			s.spans[traceID] = []Span{}
 			s.order = append(s.order, traceID)
+			
+			// Head-based sampling: hash trace ID to determine initial sampling decision
+			hash := 0
+			for _, char := range traceID {
+				hash += int(char)
+			}
+			s.sampled[traceID] = (hash % 100) < s.samplingRate
 		}
 
 		// Prevent duplicate spans
@@ -86,6 +109,18 @@ func (s *Store) AddSpans(newSpans []Span) {
 
 		if !duplicate {
 			s.spans[traceID] = append(s.spans[traceID], span)
+			
+			// Tail-based sampling override: always keep traces with errors or slow query alerts!
+			isError := span.Status == 2
+			isSlowQuery := false
+			if span.Attributes != nil {
+				if sq, ok := span.Attributes["db.slow_query"]; ok {
+					isSlowQuery = (sq == true || sq == "true")
+				}
+			}
+			if isError || isSlowQuery {
+				s.sampled[traceID] = true
+			}
 		}
 	}
 }

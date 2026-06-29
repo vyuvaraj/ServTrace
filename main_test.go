@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -219,5 +220,76 @@ func TestServTraceCollector(t *testing.T) {
 		if tSum.TraceID == traceID {
 			t.Errorf("expected Trace 1 (%s) to be evicted, but it is still in memory", traceID)
 		}
+	}
+}
+
+func TestSamplingPolicies(t *testing.T) {
+	// Initialize store with 0% sampling rate (head-based drops everything by default)
+	os.Setenv("SERV_TRACE_SAMPLING_RATE", "0")
+	defer os.Unsetenv("SERV_TRACE_SAMPLING_RATE")
+
+	evictChan := make(chan string, 10)
+	ts := store.NewStore(2) // limit 2
+	ts.OnEvict = func(traceID string, spans []store.Span) {
+		evictChan <- traceID
+	}
+
+	// 1. Add healthy trace. Should not be sampled (not archived on eviction)
+	ts.AddSpans([]store.Span{
+		{TraceID: "trace-healthy", SpanID: "span1", Name: "GET", Status: 1, Service: "gateway"},
+	})
+
+	// 2. Add trace with error (tail-based override). Should be sampled (archived on eviction)
+	ts.AddSpans([]store.Span{
+		{TraceID: "trace-error", SpanID: "span2", Name: "GET", Status: 2, Service: "gateway"}, // status 2 = error
+	})
+
+	// 3. Add trace with slow query (tail-based override). Should be sampled (archived on eviction)
+	ts.AddSpans([]store.Span{
+		{
+			TraceID: "trace-slow-query", 
+			SpanID: "span3", 
+			Name: "SELECT", 
+			Status: 1, 
+			Service: "database",
+			Attributes: map[string]interface{}{
+				"db.slow_query": true,
+			},
+		},
+	})
+
+	// Triggers evictions! Since limit is 2, adding the 3rd trace evicts the 1st ("trace-healthy").
+	// Since "trace-healthy" is not sampled, it should NOT trigger OnEvict.
+	// Let's add a 4th trace to evict "trace-error", which IS sampled and should trigger OnEvict.
+	ts.AddSpans([]store.Span{
+		{TraceID: "trace-fourth", SpanID: "span4", Name: "GET", Status: 1, Service: "gateway"},
+	})
+
+	// Wait a moment for async eviction callbacks
+	time.Sleep(50 * time.Millisecond)
+	close(evictChan)
+
+	var evicted []string
+	for id := range evictChan {
+		evicted = append(evicted, id)
+	}
+
+	// We expect "trace-error" to be evicted and archived. "trace-healthy" should have been evicted but skipped.
+	foundHealthy := false
+	foundError := false
+	for _, id := range evicted {
+		if id == "trace-healthy" {
+			foundHealthy = true
+		}
+		if id == "trace-error" {
+			foundError = true
+		}
+	}
+
+	if foundHealthy {
+		t.Errorf("Expected trace-healthy to be dropped, but it was archived")
+	}
+	if !foundError {
+		t.Errorf("Expected trace-error to be archived, but it was dropped")
 	}
 }
