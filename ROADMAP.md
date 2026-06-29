@@ -17,7 +17,7 @@ This roadmap outlines the planned development phases for the ServTrace distribut
 - [x] **Trace Query APIs**: REST APIs to list traces and fetch waterfall visualization trees.
 
 ## Phase 2: Observability UI & SQL Workbench Integration (Planned)
-- [ ] **Interactive Waterfall UI**: Interactive Gantt-chart style trace waterfall interface.
+- [x] **Interactive Waterfall UI**: Interactive Gantt-chart style trace waterfall interface. [June 29, 2026]
 - [ ] **Dependency Graph Generator**: Visual dependency graph indicating edge metrics (latency, error count).
 - [ ] **Database Slow Query Alerts**: Automatic highlighting of queries exceeding threshold.
 
