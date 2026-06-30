@@ -32,6 +32,6 @@ This roadmap outlines the planned development phases for the ServTrace distribut
 - [ ] **Trace Comparison**: Compare two traces side-by-side to identify regression causes.
 - [ ] **Service Map Generation**: Auto-build dependency graph from trace parent-child relationships.
 - [ ] **Retention Policies**: Configurable TTL per service. Auto-archive old traces to ServStore.
-- [ ] **Metrics Derivation**: Extract RED metrics (Rate, Error, Duration) from traces. No separate metrics pipeline needed.
+- [x] **Metrics Derivation**: Extract RED metrics (Rate, Error, Duration) from traces. No separate metrics pipeline needed. [June 30, 2026]
 - [x] **Trace-to-Log Correlation**: Link trace spans directly to structured log entries via shared trace_id. [June 29, 2026]
 - [ ] **Distributed Context Baggage**: Propagate custom key-value pairs across service boundaries via trace context.
