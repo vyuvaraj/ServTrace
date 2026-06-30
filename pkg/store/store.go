@@ -56,6 +56,12 @@ type LogLine struct {
 	Message   string    `json:"message"`
 }
 
+type Anomaly struct {
+	TraceID     string    `json:"traceId"`
+	Description string    `json:"description"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
 type Store struct {
 	mu           sync.RWMutex
 	spans        map[string][]Span // key: traceId
@@ -69,6 +75,7 @@ type Store struct {
 	latencies  map[string][]float64   // key: service:spanName -> list of latencies in ms
 	timestamps map[string][]time.Time // key: service:spanName -> list of hit timestamps
 	traceLogs  map[string][]LogLine   // key: traceId
+	anomalies  []Anomaly
 }
 
 func NewStore(limit int) *Store {
@@ -86,6 +93,7 @@ func NewStore(limit int) *Store {
 		latencies:    make(map[string][]float64),
 		timestamps:   make(map[string][]time.Time),
 		traceLogs:    make(map[string][]LogLine),
+		anomalies:    make([]Anomaly, 0),
 	}
 }
 
@@ -487,8 +495,9 @@ func (s *Store) recordSpanMetrics(span Span) {
 	// Anomaly Detection:
 	// 1. Latency Spike: if duration > 3 * currentP90 (and we have enough samples)
 	if currentP90 > 0 && durationMs > 3*currentP90 {
-		fmt.Printf("[ANOMALY_DETECTION] Latency spike detected in service %s (span: %s): %.2fms exceeds 3x rolling P90 (%.2fms)\n",
-			span.Service, span.Name, durationMs, currentP90)
+		desc := fmt.Sprintf("Latency spike in service %s (span: %s): %.2fms exceeds 3x rolling P90 (%.2fms)", span.Service, span.Name, durationMs, currentP90)
+		fmt.Printf("[ANOMALY_DETECTION] %s\n", desc)
+		s.anomalies = append(s.anomalies, Anomaly{TraceID: span.TraceID, Description: desc, Timestamp: time.Now()})
 	}
 
 	// 2. Error Burst: check error rate in the last 10 samples
@@ -501,9 +510,14 @@ func (s *Store) recordSpanMetrics(span Span) {
 			}
 		}
 		if totalInTrace >= 3 && float64(errCount)/float64(totalInTrace) > 0.3 {
-			fmt.Printf("[ANOMALY_DETECTION] Error burst detected in trace %s: %d errors in %d spans (%.1f%% error rate)\n",
-				span.TraceID, errCount, totalInTrace, float64(errCount)/float64(totalInTrace)*100.0)
+			desc := fmt.Sprintf("Error burst in trace %s: %d errors in %d spans (%.1f%% error rate)", span.TraceID, errCount, totalInTrace, float64(errCount)/float64(totalInTrace)*100.0)
+			fmt.Printf("[ANOMALY_DETECTION] %s\n", desc)
+			s.anomalies = append(s.anomalies, Anomaly{TraceID: span.TraceID, Description: desc, Timestamp: time.Now()})
 		}
+	}
+
+	if len(s.anomalies) > 100 {
+		s.anomalies = s.anomalies[1:]
 	}
 }
 
@@ -579,5 +593,14 @@ func (s *Store) GetLogs(traceID string) []LogLine {
 	logsCopy := make([]LogLine, len(logs))
 	copy(logsCopy, logs)
 	return logsCopy
+}
+
+func (s *Store) GetAnomalies() []Anomaly {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	anomaliesCopy := make([]Anomaly, len(s.anomalies))
+	copy(anomaliesCopy, s.anomalies)
+	return anomaliesCopy
 }
 

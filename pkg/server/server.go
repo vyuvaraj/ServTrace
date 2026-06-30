@@ -34,6 +34,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/traces", s.handleListTraces)
 	mux.HandleFunc("/api/dependency-graph", s.handleDependencyGraph)
 	mux.HandleFunc("/api/metrics", s.handleGetMetrics)
+	mux.HandleFunc("/api/v1/metrics", s.handleGetMetrics)
+	mux.HandleFunc("/api/v1/anomalies", s.handleGetAnomalies)
 	mux.HandleFunc("/api/logs", s.handleIngestLog)
 	
 	mux.HandleFunc("/api/traces/", func(w http.ResponseWriter, req *http.Request) {
@@ -370,4 +372,15 @@ func (s *Server) handleGetTraceLogs(w http.ResponseWriter, req *http.Request, tr
 	logs := s.traceStore.GetLogs(traceID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(logs)
+}
+
+func (s *Server) handleGetAnomalies(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	anomalies := s.traceStore.GetAnomalies()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(anomalies)
 }
