@@ -409,3 +409,24 @@ func TestTraceToLogCorrelation(t *testing.T) {
 		t.Errorf("expected log message to match, got %q", logs[0].Message)
 	}
 }
+
+func BenchmarkTraceStoreAddSpans(b *testing.B) {
+	s := store.NewStore(10000)
+	now := int64(1700000000000000000)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		traceID := fmt.Sprintf("trace-%d", i%100)
+		spans := []store.Span{
+			{
+				TraceID:   traceID,
+				SpanID:    fmt.Sprintf("span-%d", i),
+				Name:      "http.request",
+				StartTime: now,
+				EndTime:   now + int64(5*time.Millisecond),
+				Service:   "servgate",
+			},
+		}
+		s.AddSpans(spans)
+	}
+}
