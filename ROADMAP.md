@@ -40,5 +40,9 @@ This roadmap outlines the planned development phases for the ServTrace distribut
 - [ ] **`serv trace search` CLI** — Search traces by service, operation, error, or duration threshold from the terminal; output as JSON or ASCII waterfall (DevOps)
 - [ ] **Continuous Profiling Integration** — Link pprof CPU/memory profiles to trace spans; surface hot-path profiles in the ServConsole waterfall view alongside latency (Performance)
 - [ ] **Adaptive Sampling Rate** — Dynamically raise sampling rate when error rate spikes and lower it when traffic is healthy — reduces overhead in normal operation while capturing all errors (Performance / DevOps)
+- [ ] **Trace Comparison** — Compare two traces side-by-side to identify regression causes (DX)
+- [ ] **Service Map Generation** — Auto-build dependency graph from trace parent-child relationships. Feed to ServConsole topology view (Integration)
+- [ ] **Retention Policies** — Configurable TTL per service. Auto-archive old traces to ServStore. Prevent unbounded disk growth (Reliability)
+- [ ] **Distributed Context Baggage** — Propagate custom key-value pairs across service boundaries via trace context (Integration)
 
-> See [UNIFIED_ROADMAP.md](../UNIFIED_ROADMAP.md) for the full ecosystem priority matrix and architectural recommendations.
+> See [UNIFIED_ROADMAP.md](../servverse-repo/UNIFIED_ROADMAP.md) for the full ecosystem priority matrix.
