@@ -39,6 +39,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/metrics", s.handleGetMetrics)
 	mux.HandleFunc("/api/v1/anomalies", s.handleGetAnomalies)
 	mux.HandleFunc("/api/logs", s.handleIngestLog)
+	mux.HandleFunc("/api/trace/anomaly/slow-spans", s.handleSlowSpans)
+	mux.HandleFunc("/api/trace/anomaly/slo-breach-predict", s.handleSloBreachPredict)
 	
 	mux.HandleFunc("/api/traces/", func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodDelete {
@@ -411,3 +413,97 @@ func (s *Server) handleGetAnomalies(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(anomalies)
 }
+
+func (s *Server) handleSlowSpans(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	traces := s.traceStore.ListTraces()
+	var bottlenecks []map[string]interface{}
+
+	for _, t := range traces {
+		if t.DurationMs > 500 { // focus on slow traces
+			tree, exists := s.traceStore.GetTraceTree(t.TraceID)
+			if exists && tree != nil {
+				// Find slowest child node recursively
+				slowest := tree
+				var findSlowest func(*store.SpanNode)
+				findSlowest = func(n *store.SpanNode) {
+					if n.DurationMs > slowest.DurationMs {
+						slowest = n
+					}
+					for _, child := range n.Children {
+						findSlowest(child)
+					}
+				}
+				findSlowest(tree)
+
+				percentage := 0.0
+				if tree.DurationMs > 0 {
+					percentage = (slowest.DurationMs / tree.DurationMs) * 100
+				}
+
+				bottlenecks = append(bottlenecks, map[string]interface{}{
+					"trace_id":       t.TraceID,
+					"service":        slowest.Span.Service,
+					"span_name":      slowest.Span.Name,
+					"duration_ms":    slowest.DurationMs,
+					"percentage":     percentage,
+					"explanation":    fmt.Sprintf("Auto-correlate slow spans: %s had a %s span taking %.1f%% of overall latency", slowest.Span.Service, slowest.Span.Name, percentage),
+				})
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(bottlenecks)
+}
+
+func (s *Server) handleSloBreachPredict(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	traces := s.traceStore.ListTraces()
+	total := len(traces)
+	errors := 0
+
+	for _, t := range traces {
+		if t.ErrorCount > 0 {
+			errors++
+		}
+	}
+
+	failureRate := 0.0
+	if total > 0 {
+		failureRate = float64(errors) / float64(total)
+	}
+
+	// Simple linear extrapolation of SLO budget remaining
+	sloTarget := 0.99 // 99% availability target
+	allowedFailRate := 1.0 - sloTarget
+	budgetBurnRatio := 0.0
+	if allowedFailRate > 0 {
+		budgetBurnRatio = failureRate / allowedFailRate
+	}
+
+	daysRemaining := 30.0
+	if budgetBurnRatio > 1.0 {
+		daysRemaining = 30.0 / budgetBurnRatio
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_traces":    total,
+		"error_count":     errors,
+		"failure_rate":    failureRate,
+		"slo_target":      sloTarget,
+		"budget_burn":     budgetBurnRatio,
+		"days_to_breach":  daysRemaining,
+		"status":          fmt.Sprintf("Current error rate trajectory: SLO budget exhausted in %.1f days", daysRemaining),
+	})
+}
+
