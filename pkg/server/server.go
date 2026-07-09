@@ -19,7 +19,9 @@ type Server struct {
 }
 
 func NewServer(ts *store.Store) *Server {
-	return &Server{traceStore: ts}
+	s := &Server{traceStore: ts}
+	s.startSelfHealingLoop()
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -564,4 +566,66 @@ func (s *Server) handleSloBreachPredict(w http.ResponseWriter, req *http.Request
 		"status":          fmt.Sprintf("Current error rate trajectory: SLO budget exhausted in %.1f days", daysRemaining),
 	})
 }
+
+func (s *Server) startSelfHealingLoop() {
+	ticker := time.NewTicker(1 * time.Second)
+	go func() {
+		for range ticker.C {
+			s.runSelfHealingDiagnostics()
+		}
+	}()
+}
+
+func (s *Server) runSelfHealingDiagnostics() {
+	traces := s.traceStore.ListTraces()
+	if len(traces) == 0 {
+		return
+	}
+
+	serviceErrors := make(map[string]int)
+	serviceTotal := make(map[string]int)
+
+	for _, t := range traces {
+		if t.Service != "" {
+			serviceTotal[t.Service]++
+			if t.ErrorCount > 0 {
+				serviceErrors[t.Service]++
+			}
+		}
+	}
+
+	for svc, total := range serviceTotal {
+		if total >= 5 {
+			errRate := float64(serviceErrors[svc]) / float64(total)
+			if errRate > 0.20 {
+				fmt.Printf("[Self-Healing] High error rate (%.2f%%) detected on service '%s'. Triggering rollback...\n", errRate*100, svc)
+				s.triggerRollback(svc)
+			}
+		}
+	}
+}
+
+func (s *Server) triggerRollback(service string) {
+	cloudURL := os.Getenv("SERV_CLOUD_URL")
+	if cloudURL == "" {
+		cloudURL = "http://localhost:8086"
+	}
+
+	url := fmt.Sprintf("%s/api/services/%s/rollback", strings.TrimSuffix(cloudURL, "/"), service)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post(url, "application/json", nil)
+	if err != nil {
+		fmt.Printf("[Self-Healing] Failed to trigger rollback: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		fmt.Printf("[Self-Healing] Rollback triggered successfully for service '%s'!\n", service)
+		// Clear traces after successful rollback to reset error count
+		s.traceStore.Clear()
+	} else {
+		fmt.Printf("[Self-Healing] Rollback failed with status: %d\n", resp.StatusCode)
+	}
+}
+
 
