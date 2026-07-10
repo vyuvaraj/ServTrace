@@ -74,3 +74,6 @@ scoops:
     homepage: "https://github.com/vyuvaraj/ServTrace"
     description: "Distributed tracing and observability service from the ServVerse platform"
     license: "Apache-2.0"
+
+release:
+  replace_existing: true
