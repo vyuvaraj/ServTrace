@@ -1,5 +1,9 @@
 # ServTrace — Distributed Tracing Backend
 
+```bash
+docker run -p 4317:4317 -p 4318:4318 ghcr.io/vyuvaraj/servtrace:latest
+```
+
 ServTrace is the centralized distributed tracing collector and visualizer backend for the Serv ecosystem. It implements OTLP/HTTP trace ingestion, allowing it to collect traces from all services and reconstruct trace waterfalls.
 
 ## Features
