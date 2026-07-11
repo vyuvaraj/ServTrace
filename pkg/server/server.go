@@ -30,6 +30,8 @@ var ActiveAnomalyExplainer AnomalyExplainer
 // ActiveSloBreachPredictor is the globally registered SLO breach predictor hook.
 var ActiveSloBreachPredictor SloBreachPredictor
 
+var enterpriseInit = func(s *Server) {}
+
 type Server struct {
 	traceStore *store.Store
 }
@@ -38,6 +40,7 @@ func NewServer(ts *store.Store) *Server {
 	s := &Server{traceStore: ts}
 	s.startSelfHealingLoop()
 	s.startRetentionCleanerLoop()
+	enterpriseInit(s)
 	return s
 }
 
