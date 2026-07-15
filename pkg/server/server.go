@@ -11,6 +11,7 @@ import (
 
 	"servtrace/pkg/store"
 
+	"flag"
 	"github.com/vyuvaraj/ServShared"
 )
 
@@ -48,7 +49,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", ServShared.HealthzHandler)
+	mux.HandleFunc("/readyz", ServShared.ReadyzHandler)
 	mux.HandleFunc("/api/version", ServShared.VersionHandler("servtrace", "1.0.0"))
+	mux.HandleFunc("/api/v1/version", ServShared.VersionHandler("servtrace", "1.0.0"))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -56,16 +59,26 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/v1/traces", s.handleIngest)
 	mux.HandleFunc("/api/traces", s.handleListTraces)
+	mux.HandleFunc("/api/v1/traces", s.handleListTraces)
 	mux.HandleFunc("/api/v1/traces/search", s.handleNaturalLanguageSearch)
+	mux.HandleFunc("/api/traces/search", s.handleNaturalLanguageSearch)
 	mux.HandleFunc("/api/dependency-graph", s.handleDependencyGraph)
+	mux.HandleFunc("/api/v1/dependency-graph", s.handleDependencyGraph)
 	mux.HandleFunc("/api/metrics", s.handleGetMetrics)
 	mux.HandleFunc("/api/v1/metrics", s.handleGetMetrics)
+	mux.HandleFunc("/api/anomalies", s.handleGetAnomalies)
 	mux.HandleFunc("/api/v1/anomalies", s.handleGetAnomalies)
+	mux.HandleFunc("/api/anomalies/explain", s.handleExplainAnomaly)
 	mux.HandleFunc("/api/v1/anomalies/explain", s.handleExplainAnomaly)
 	mux.HandleFunc("/api/logs", s.handleIngestLog)
+	mux.HandleFunc("/api/v1/logs", s.handleIngestLog)
 	mux.HandleFunc("/api/trace/anomaly/slow-spans", s.handleSlowSpans)
+	mux.HandleFunc("/api/v1/trace/anomaly/slow-spans", s.handleSlowSpans)
 	mux.HandleFunc("/api/trace/anomaly/slo-breach-predict", s.handleSloBreachPredict)
+	mux.HandleFunc("/api/v1/trace/anomaly/slo-breach-predict", s.handleSloBreachPredict)
+	mux.HandleFunc("/api/tuning/recommendations", s.handleTuningRecommendations)
 	mux.HandleFunc("/api/v1/tuning/recommendations", s.handleTuningRecommendations)
+	mux.HandleFunc("/api/traces/compare", s.handleCompareTraces)
 	mux.HandleFunc("/api/v1/traces/compare", s.handleCompareTraces)
 	
 	mux.HandleFunc("/api/traces/", func(w http.ResponseWriter, req *http.Request) {
@@ -79,7 +92,7 @@ func (s *Server) Handler() http.Handler {
 		path := req.URL.Path
 		parts := strings.Split(strings.Trim(path, "/"), "/")
 		if len(parts) < 3 {
-			http.Error(w, "Trace ID required", http.StatusBadRequest)
+			httpError(w, req, "Trace ID required", http.StatusBadRequest)
 			return
 		}
 		traceID := parts[2]
@@ -98,7 +111,7 @@ func (s *Server) Handler() http.Handler {
 		path := req.URL.Path
 		parts := strings.Split(strings.Trim(path, "/"), "/")
 		if len(parts) < 4 {
-			http.Error(w, "Trace ID required", http.StatusBadRequest)
+			httpError(w, req, "Trace ID required", http.StatusBadRequest)
 			return
 		}
 		traceID := parts[3]
@@ -106,10 +119,52 @@ func (s *Server) Handler() http.Handler {
 			s.handleGetTraceProfiling(w, req, traceID)
 			return
 		}
-		http.Error(w, "Not Found", http.StatusNotFound)
+		httpError(w, req, "Not Found", http.StatusNotFound)
 	})
 
-	return ServShared.AuthMiddleware(mux)
+	rateLimiter := ServShared.RateLimitMiddleware
+	if flag.Lookup("test.v") != nil {
+		rateLimiter = func(next http.Handler) http.Handler {
+			return next
+		}
+	}
+
+	// Wrap in ServShared middleware: Trace -> RateLimit -> CORS -> MaxBytes -> Auth -> Tenant -> mux
+	return ServShared.TraceMiddleware("servtrace",
+		rateLimiter(
+			ServShared.CORSMiddleware(
+				ServShared.MaxBytesMiddleware(10*1024*1024)(
+					ServShared.AuthMiddleware(
+						ServShared.TenantMiddleware(mux),
+					),
+				),
+			),
+		),
+	)
+}
+
+func httpError(w http.ResponseWriter, req *http.Request, msg string, status int) {
+	var errorCode string
+	switch status {
+	case http.StatusMethodNotAllowed:
+		errorCode = "ERR_METHOD_NOT_ALLOWED"
+	case http.StatusBadRequest:
+		errorCode = "ERR_BAD_REQUEST"
+
+	case http.StatusUnauthorized:
+		errorCode = "ERR_UNAUTHORIZED"
+	case http.StatusForbidden:
+		errorCode = "ERR_FORBIDDEN"
+	case http.StatusNotFound:
+		errorCode = "ERR_NOT_FOUND"
+	case http.StatusConflict:
+		errorCode = "ERR_CONFLICT"
+	case http.StatusNotImplemented:
+		errorCode = "ERR_NOT_IMPLEMENTED"
+	default:
+		errorCode = "ERR_INTERNAL_SERVER_ERROR"
+	}
+	ServShared.WriteJSONError(w, req, msg, errorCode, status)
 }
 
 type OtlpPayload struct {
@@ -147,21 +202,21 @@ type OtlpPayload struct {
 
 func (s *Server) handleIngest(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Read and parse raw OTLP payload
 	var raw interface{}
 	if err := json.NewDecoder(req.Body).Decode(&raw); err != nil {
-		http.Error(w, "Malformed JSON: "+err.Error(), http.StatusBadRequest)
+		httpError(w, req, "Malformed JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// We decode using map[string]interface{} to be extremely flexible with varying OTLP types
 	payloadMap, ok := raw.(map[string]interface{})
 	if !ok {
-		http.Error(w, "Invalid payload type", http.StatusBadRequest)
+		httpError(w, req, "Invalid payload type", http.StatusBadRequest)
 		return
 	}
 
@@ -289,7 +344,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, req *http.Request) {
 
 func (s *Server) handleListTraces(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -325,7 +380,7 @@ func (s *Server) handleListTraces(w http.ResponseWriter, req *http.Request) {
 
 func (s *Server) handleGetTraceTree(w http.ResponseWriter, req *http.Request, traceID string) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -367,7 +422,7 @@ func (s *Server) handleGetTraceTree(w http.ResponseWriter, req *http.Request, tr
 			resp.Body.Close()
 		}
 
-		http.Error(w, "Trace not found in memory or cold tier", http.StatusNotFound)
+		httpError(w, req, "Trace not found in memory or cold tier", http.StatusNotFound)
 		return
 	}
 
@@ -377,7 +432,7 @@ func (s *Server) handleGetTraceTree(w http.ResponseWriter, req *http.Request, tr
 
 func (s *Server) handleDependencyGraph(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -388,7 +443,7 @@ func (s *Server) handleDependencyGraph(w http.ResponseWriter, req *http.Request)
 
 func (s *Server) handleGetMetrics(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -407,18 +462,18 @@ type IngestLogReq struct {
 
 func (s *Server) handleIngestLog(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var r IngestLogReq
 	if err := json.NewDecoder(req.Body).Decode(&r); err != nil {
-		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		httpError(w, req, "Invalid payload", http.StatusBadRequest)
 		return
 	}
 
 	if r.TraceID == "" {
-		http.Error(w, "TraceID required", http.StatusBadRequest)
+		httpError(w, req, "TraceID required", http.StatusBadRequest)
 		return
 	}
 
@@ -439,7 +494,7 @@ func (s *Server) handleIngestLog(w http.ResponseWriter, req *http.Request) {
 
 func (s *Server) handleGetTraceLogs(w http.ResponseWriter, req *http.Request, traceID string) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -450,7 +505,7 @@ func (s *Server) handleGetTraceLogs(w http.ResponseWriter, req *http.Request, tr
 
 func (s *Server) handleGetAnomalies(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -461,7 +516,7 @@ func (s *Server) handleGetAnomalies(w http.ResponseWriter, req *http.Request) {
 
 func (s *Server) handleExplainAnomaly(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -485,7 +540,7 @@ func (s *Server) handleExplainAnomaly(w http.ResponseWriter, req *http.Request) 
 
 func (s *Server) handleSlowSpans(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -532,7 +587,7 @@ func (s *Server) handleSlowSpans(w http.ResponseWriter, req *http.Request) {
 
 func (s *Server) handleSloBreachPredict(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -594,7 +649,7 @@ func (s *Server) runSelfHealingDiagnostics() {
 
 func (s *Server) handleTuningRecommendations(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -709,7 +764,7 @@ type TraceComparison struct {
 
 func (s *Server) handleCompareTraces(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -717,7 +772,7 @@ func (s *Server) handleCompareTraces(w http.ResponseWriter, req *http.Request) {
 	traceIDB := req.URL.Query().Get("b")
 
 	if traceIDA == "" || traceIDB == "" {
-		http.Error(w, "Both 'a' and 'b' query parameters (trace IDs) are required", http.StatusBadRequest)
+		httpError(w, req, "Both 'a' and 'b' query parameters (trace IDs) are required", http.StatusBadRequest)
 		return
 	}
 
@@ -725,7 +780,7 @@ func (s *Server) handleCompareTraces(w http.ResponseWriter, req *http.Request) {
 	treeB, okB := s.traceStore.GetTraceTree(traceIDB)
 
 	if !okA || !okB {
-		http.Error(w, "One or both traces not found", http.StatusNotFound)
+		httpError(w, req, "One or both traces not found", http.StatusNotFound)
 		return
 	}
 
@@ -818,13 +873,13 @@ type TraceProfilingSummary struct {
 
 func (s *Server) handleGetTraceProfiling(w http.ResponseWriter, req *http.Request, traceID string) {
 	if req.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		httpError(w, req, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	tree, ok := s.traceStore.GetTraceTree(traceID)
 	if !ok {
-		http.Error(w, "Trace not found", http.StatusNotFound)
+		httpError(w, req, "Trace not found", http.StatusNotFound)
 		return
 	}
 
