@@ -455,9 +455,21 @@ func TestPluggableTraceEnterpriseFeatures(t *testing.T) {
 	ts := store.NewStore(100)
 	srv := NewServer(ts)
 
-	// 1. Check fallback to 403 when ActiveAnomalyExplainer and ActiveSloBreachPredictor are nil
+	// 1. Check fallback to 403 when ActiveAnomalyExplainer and ActiveSloBreachPredictor are nil.
+	// In an EE build, init() registers these hooks, so we must temporarily nil them to
+	// simulate the OSS "no hook" state, then restore them afterward.
+	savedExplainer := ActiveAnomalyExplainer
+	savedSlo := ActiveSloBreachPredictor
+	ActiveAnomalyExplainer = nil
+	ActiveSloBreachPredictor = nil
+	defer func() {
+		ActiveAnomalyExplainer = savedExplainer
+		ActiveSloBreachPredictor = savedSlo
+	}()
+
 	reqExplainOSS := httptest.NewRequest("GET", "/api/v1/anomalies/explain?traceId=test-trace", nil)
 	wExplainOSS := httptest.NewRecorder()
+
 	srv.Handler().ServeHTTP(wExplainOSS, reqExplainOSS)
 	if wExplainOSS.Code != http.StatusForbidden {
 		t.Errorf("expected 403 Forbidden for explain endpoint in OSS, got %d", wExplainOSS.Code)
